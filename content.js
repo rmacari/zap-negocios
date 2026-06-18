@@ -66,6 +66,13 @@
     emailEnabled: false,
     emailIntervalMinutes: 120
   };
+  const DEFAULT_TASK_AUTOMATION_SETTINGS = {
+    autoFollowupEnabled: false,
+    dueHours: 24,
+    businessStart: '08:00',
+    businessEnd: '18:00',
+    title: 'Fazer follow-up'
+  };
   const DEFAULT_THEME_SETTINGS = {
     mode: 'auto',
     nightStart: '18:00',
@@ -83,10 +90,12 @@
   let toggleSettingsLoaded = false;
   let panelSettingsLoaded = false;
   let notificationSettingsLoaded = false;
+  let taskAutomationSettingsLoaded = false;
   let themeSettingsLoaded = false;
   let toggleSettings = { ...DEFAULT_TOGGLE_SETTINGS };
   let panelSettings = { ...DEFAULT_PANEL_SETTINGS };
   let notificationSettings = { ...DEFAULT_NOTIFICATION_SETTINGS };
+  let taskAutomationSettings = { ...DEFAULT_TASK_AUTOMATION_SETTINGS };
   let themeSettings = { ...DEFAULT_THEME_SETTINGS };
   let rolePermissionMap = {};
   let userPermissionMap = {};
@@ -668,6 +677,112 @@
         reject(error);
       }
     });
+  }
+
+  function normalizeTaskAutomationSettings(value = {}) {
+    return {
+      autoFollowupEnabled: value.autoFollowupEnabled === true,
+      dueHours: clampNumber(value.dueHours ?? DEFAULT_TASK_AUTOMATION_SETTINGS.dueHours, 1, 720),
+      businessStart: /^\d{2}:\d{2}$/.test(String(value.businessStart || '')) ? String(value.businessStart) : DEFAULT_TASK_AUTOMATION_SETTINGS.businessStart,
+      businessEnd: /^\d{2}:\d{2}$/.test(String(value.businessEnd || '')) ? String(value.businessEnd) : DEFAULT_TASK_AUTOMATION_SETTINGS.businessEnd,
+      title: String(value.title || DEFAULT_TASK_AUTOMATION_SETTINGS.title).trim() || DEFAULT_TASK_AUTOMATION_SETTINGS.title
+    };
+  }
+
+  async function loadTaskAutomationSettings() {
+    if (!isConfigured()) {
+      taskAutomationSettings = { ...DEFAULT_TASK_AUTOMATION_SETTINGS };
+      taskAutomationSettingsLoaded = true;
+      return taskAutomationSettings;
+    }
+
+    try {
+      const result = await fetchJson(`${API_BASE}/settings.php?key=task_automation&_t=${Date.now()}`, {
+        headers: apiHeaders()
+      });
+      taskAutomationSettings = normalizeTaskAutomationSettings(result.settings || {});
+    } catch {
+      taskAutomationSettings = { ...DEFAULT_TASK_AUTOMATION_SETTINGS };
+    }
+
+    taskAutomationSettingsLoaded = true;
+    return taskAutomationSettings;
+  }
+
+  async function saveTaskAutomationSettings(settings) {
+    taskAutomationSettings = normalizeTaskAutomationSettings(settings);
+
+    const result = await fetchJson(`${API_BASE}/settings.php`, {
+      method: 'POST',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        key: 'task_automation',
+        settings: taskAutomationSettings
+      })
+    });
+
+    taskAutomationSettings = normalizeTaskAutomationSettings(result.settings || taskAutomationSettings);
+    taskAutomationSettingsLoaded = true;
+    return taskAutomationSettings;
+  }
+
+  function getTaskAutomationStatusEl() {
+    return document.getElementById('tfq-task-automation-status');
+  }
+
+  function setTaskAutomationStatus(message, type = '') {
+    const el = getTaskAutomationStatusEl();
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = type ? type : '';
+  }
+
+  function renderTaskAutomationSettingsForm() {
+    const enabledInput = document.getElementById('tfq-auto-followup-enabled');
+    const dueInput = document.getElementById('tfq-auto-followup-hours');
+    const startInput = document.getElementById('tfq-auto-followup-start');
+    const endInput = document.getElementById('tfq-auto-followup-end');
+    const titleInput = document.getElementById('tfq-auto-followup-title');
+    if (!enabledInput || !dueInput || !startInput || !endInput || !titleInput) return;
+
+    const settings = normalizeTaskAutomationSettings(taskAutomationSettings);
+    enabledInput.checked = settings.autoFollowupEnabled;
+    dueInput.value = String(settings.dueHours);
+    startInput.value = settings.businessStart;
+    endInput.value = settings.businessEnd;
+    titleInput.value = settings.title;
+  }
+
+  function collectTaskAutomationSettingsForm() {
+    return normalizeTaskAutomationSettings({
+      autoFollowupEnabled: document.getElementById('tfq-auto-followup-enabled')?.checked === true,
+      dueHours: document.getElementById('tfq-auto-followup-hours')?.value,
+      businessStart: document.getElementById('tfq-auto-followup-start')?.value,
+      businessEnd: document.getElementById('tfq-auto-followup-end')?.value,
+      title: document.getElementById('tfq-auto-followup-title')?.value
+    });
+  }
+
+  async function saveTaskAutomationSettingsFromForm() {
+    try {
+      setTaskAutomationStatus('Salvando tarefas...', '');
+      await saveTaskAutomationSettings(collectTaskAutomationSettingsForm());
+      renderTaskAutomationSettingsForm();
+      setTaskAutomationStatus('Configuração de tarefas salva para todos os usuários.', 'success');
+    } catch (error) {
+      setTaskAutomationStatus(`Erro: ${error.message}`, 'error');
+    }
+  }
+
+  async function resetTaskAutomationSettings() {
+    try {
+      setTaskAutomationStatus('Restaurando padrão...', '');
+      await saveTaskAutomationSettings(DEFAULT_TASK_AUTOMATION_SETTINGS);
+      renderTaskAutomationSettingsForm();
+      setTaskAutomationStatus('Configuração global de tarefas restaurada.', 'success');
+    } catch (error) {
+      setTaskAutomationStatus(`Erro: ${error.message}`, 'error');
+    }
   }
 
   function getToggleAppearanceStatusEl() {
@@ -4712,6 +4827,46 @@
 
         <!-- ABA ADMIN -->
         <div id="tfq-tab-usuarios" class="tfq-tab-pane tfq-tab-pane-hidden">
+          <details class="tfq-card tfq-admin-section" data-admin-permission="tasks.admin" open>
+            <summary class="tfq-admin-summary">
+              <span>Tarefas</span>
+            </summary>
+            <div class="tfq-admin-section-body">
+              <label class="tfq-check-row" for="tfq-auto-followup-enabled">
+                <input id="tfq-auto-followup-enabled" type="checkbox" />
+                Criar nova tarefa automaticamente ao concluir
+              </label>
+
+              <div class="tfq-grid">
+                <div class="tfq-row">
+                  <label class="tfq-label" for="tfq-auto-followup-title">Título da nova tarefa</label>
+                  <input class="tfq-input" id="tfq-auto-followup-title" type="text" maxlength="80" />
+                </div>
+
+                <div class="tfq-row">
+                  <label class="tfq-label" for="tfq-auto-followup-hours">Prazo padrão (horas)</label>
+                  <input class="tfq-input" id="tfq-auto-followup-hours" type="number" min="1" max="720" step="1" />
+                </div>
+
+                <div class="tfq-row">
+                  <label class="tfq-label" for="tfq-auto-followup-start">Início do horário comercial</label>
+                  <input class="tfq-input" id="tfq-auto-followup-start" type="time" />
+                </div>
+
+                <div class="tfq-row">
+                  <label class="tfq-label" for="tfq-auto-followup-end">Fim do horário comercial</label>
+                  <input class="tfq-input" id="tfq-auto-followup-end" type="time" />
+                </div>
+              </div>
+
+              <div class="tfq-actions">
+                <button class="tfq-btn tfq-btn-primary" id="tfq-save-task-automation" type="button">Salvar tarefas</button>
+                <button class="tfq-btn tfq-btn-secondary" id="tfq-reset-task-automation" type="button">Restaurar padrão</button>
+              </div>
+              <div id="tfq-task-automation-status"></div>
+            </div>
+          </details>
+
           <details class="tfq-card tfq-admin-section" data-admin-permission="admin.fields.view">
             <summary class="tfq-admin-summary">
               <span>Campos personalizados</span>
@@ -4835,12 +4990,14 @@
       .then(() => toggleSettingsLoaded ? applyToggleSettings() : loadToggleSettings())
       .then(() => panelSettingsLoaded ? applyPanelSettings() : loadPanelSettings())
       .then(() => notificationSettingsLoaded ? undefined : loadNotificationSettings())
+      .then(() => taskAutomationSettingsLoaded ? undefined : loadTaskAutomationSettings())
       .then(() => themeSettingsLoaded ? applyThemeSettings() : loadThemeSettings())
       .then(() => {
         renderThemeSettingsForm();
         renderToggleAppearanceForm();
         renderPanelSettingsForm();
         renderNotificationSettingsForm();
+        renderTaskAutomationSettingsForm();
         refreshOverdueBadgesOnPageLoad();
       });
 
@@ -4860,6 +5017,8 @@
         applyPanelSettings();
       }
       if (!notificationSettingsLoaded) await loadNotificationSettings();
+      if (!taskAutomationSettingsLoaded) await loadTaskAutomationSettings();
+      renderTaskAutomationSettingsForm();
       if (!themeSettingsLoaded) {
         await loadThemeSettings();
       } else {
@@ -5048,6 +5207,8 @@
     panel.querySelector('#tfq-reset-panel-settings').addEventListener('click', resetPanelSettings);
     panel.querySelector('#tfq-save-notification-settings').addEventListener('click', saveNotificationSettingsFromForm);
     panel.querySelector('#tfq-reset-notification-settings').addEventListener('click', resetNotificationSettings);
+    panel.querySelector('#tfq-save-task-automation').addEventListener('click', saveTaskAutomationSettingsFromForm);
+    panel.querySelector('#tfq-reset-task-automation').addEventListener('click', resetTaskAutomationSettings);
     panel.querySelector('#tfq-theme-mode').addEventListener('change', previewThemeSettings);
     panel.querySelector('#tfq-theme-night-start').addEventListener('input', previewThemeSettings);
     panel.querySelector('#tfq-theme-night-end').addEventListener('input', previewThemeSettings);

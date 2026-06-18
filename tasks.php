@@ -256,6 +256,181 @@ function ensureNegocioBelongsToContext($negocioId, $context)
     return $negocioId;
 }
 
+function parseBoolValue($value)
+{
+    if (is_bool($value)) {
+        return $value;
+    }
+
+    if (is_numeric($value)) {
+        return (int) $value === 1;
+    }
+
+    return in_array(strtolower(trim((string) $value)), ['1', 'true', 'sim', 'yes', 'on'], true);
+}
+
+function normalizeBusinessTime($value, $fallback)
+{
+    $value = trim((string) $value);
+    return preg_match('/^\d{2}:\d{2}$/', $value) ? $value : $fallback;
+}
+
+function calculateAutoFollowupDueAt($hours, $businessStart, $businessEnd)
+{
+    $hours = max(1, min(720, (int) $hours));
+    $businessStart = normalizeBusinessTime($businessStart, '08:00');
+    $businessEnd = normalizeBusinessTime($businessEnd, '18:00');
+
+    $due = new DateTime('now');
+    $due->modify('+' . $hours . ' hours');
+
+    [$startHour, $startMinute] = array_map('intval', explode(':', $businessStart));
+    [$endHour, $endMinute] = array_map('intval', explode(':', $businessEnd));
+
+    $start = clone $due;
+    $start->setTime($startHour, $startMinute, 0);
+
+    $end = clone $due;
+    $end->setTime($endHour, $endMinute, 0);
+
+    if ($due < $start) {
+        return $start->format('Y-m-d H:i:s');
+    }
+
+    if ($due > $end) {
+        $due->modify('+1 day');
+        $due->setTime($startHour, $startMinute, 0);
+        return $due->format('Y-m-d H:i:s');
+    }
+
+    return $due->format('Y-m-d H:i:s');
+}
+
+function hasPendingContinuationTask($task)
+{
+    $where = [
+        'id <> :id',
+        "status = 'pendente'",
+        'assigned_user_id = :assigned_user_id',
+    ];
+    $params = [
+        'id' => (int) $task['id'],
+        'assigned_user_id' => (int) ($task['assigned_user_id'] ?? 0),
+    ];
+
+    if ((int) ($task['negocio_id'] ?? 0) > 0) {
+        $where[] = 'negocio_id = :negocio_id';
+        $params['negocio_id'] = (int) $task['negocio_id'];
+    } else {
+        $identity = [];
+
+        if (trim((string) ($task['conversation_id'] ?? '')) !== '') {
+            $identity[] = 'conversation_id = :conversation_id';
+            $params['conversation_id'] = (string) $task['conversation_id'];
+        }
+
+        if (trim((string) ($task['lead_phone'] ?? '')) !== '') {
+            $identity[] = 'lead_phone = :lead_phone';
+            $params['lead_phone'] = (string) $task['lead_phone'];
+        }
+
+        if (trim((string) ($task['source_conversation_id'] ?? '')) !== '') {
+            $identity[] = '(source_platform = :source_platform AND source_conversation_id = :source_conversation_id)';
+            $params['source_platform'] = (string) ($task['source_platform'] ?? 'travel_flow');
+            $params['source_conversation_id'] = (string) $task['source_conversation_id'];
+        }
+
+        if (!$identity) {
+            return true;
+        }
+
+        $where[] = '(' . implode(' OR ', $identity) . ')';
+    }
+
+    $stmt = getDb()->prepare('SELECT id FROM lead_tasks WHERE ' . implode(' AND ', $where) . ' LIMIT 1');
+    $stmt->execute($params);
+
+    return (bool) $stmt->fetch();
+}
+
+function getGlobalTaskAutomationSettings()
+{
+    $default = [
+        'autoFollowupEnabled' => false,
+        'dueHours' => 24,
+        'businessStart' => '08:00',
+        'businessEnd' => '18:00',
+        'title' => 'Fazer follow-up',
+    ];
+
+    if (!tableExists('zap_settings')) {
+        return $default;
+    }
+
+    $stmt = getDb()->prepare("SELECT setting_value FROM zap_settings WHERE setting_key = 'task_automation' LIMIT 1");
+    $stmt->execute();
+    $row = $stmt->fetch();
+    if (!$row) {
+        return $default;
+    }
+
+    $decoded = json_decode((string) $row['setting_value'], true);
+    if (!is_array($decoded)) {
+        return $default;
+    }
+
+    return [
+        'autoFollowupEnabled' => !empty($decoded['autoFollowupEnabled']),
+        'dueHours' => max(1, min(720, (int) ($decoded['dueHours'] ?? $default['dueHours']))),
+        'businessStart' => normalizeBusinessTime($decoded['businessStart'] ?? '', $default['businessStart']),
+        'businessEnd' => normalizeBusinessTime($decoded['businessEnd'] ?? '', $default['businessEnd']),
+        'title' => trim((string) ($decoded['title'] ?? '')) !== '' ? trim((string) $decoded['title']) : $default['title'],
+    ];
+}
+
+function maybeCreateAutoFollowupTask($completedTask, $currentUser, $settings)
+{
+    if (!parseBoolValue($settings['autoFollowupEnabled'] ?? false)) {
+        return null;
+    }
+
+    if (hasPendingContinuationTask($completedTask)) {
+        return null;
+    }
+
+    $title = trim((string) ($settings['title'] ?? ''));
+    if ($title === '') {
+        $title = 'Fazer follow-up';
+    }
+
+    $dueAt = calculateAutoFollowupDueAt(
+        $settings['dueHours'] ?? 24,
+        $settings['businessStart'] ?? '08:00',
+        $settings['businessEnd'] ?? '18:00'
+    );
+
+    $stmt = getDb()->prepare("\n        INSERT INTO lead_tasks (\n            conversation_id,\n            source_platform,\n            source_conversation_id,\n            lead_name,\n            lead_phone,\n            negocio_id,\n            title,\n            notes,\n            due_at,\n            priority,\n            status,\n            responsavel,\n            assigned_user_id,\n            created_by_user_id,\n            updated_by_user_id\n        ) VALUES (\n            :conversation_id,\n            :source_platform,\n            :source_conversation_id,\n            :lead_name,\n            :lead_phone,\n            :negocio_id,\n            :title,\n            '',\n            :due_at,\n            'normal',\n            'pendente',\n            :responsavel,\n            :assigned_user_id,\n            :created_by_user_id,\n            :updated_by_user_id\n        )\n    ");
+    $stmt->execute([
+        'conversation_id' => (string) ($completedTask['conversation_id'] ?? ''),
+        'source_platform' => (string) ($completedTask['source_platform'] ?? 'travel_flow'),
+        'source_conversation_id' => (string) ($completedTask['source_conversation_id'] ?? ''),
+        'lead_name' => (string) ($completedTask['lead_name'] ?? ''),
+        'lead_phone' => (string) ($completedTask['lead_phone'] ?? ''),
+        'negocio_id' => (int) ($completedTask['negocio_id'] ?? 0) > 0 ? (int) $completedTask['negocio_id'] : null,
+        'title' => $title,
+        'due_at' => $dueAt,
+        'responsavel' => (string) ($completedTask['responsavel'] ?? ''),
+        'assigned_user_id' => (int) ($completedTask['assigned_user_id'] ?? $currentUser['id']),
+        'created_by_user_id' => (int) $currentUser['id'],
+        'updated_by_user_id' => (int) $currentUser['id'],
+    ]);
+
+    $newId = (int) getDb()->lastInsertId();
+    logAudit($currentUser, 'task.auto_followup_create', 'lead_tasks', $newId, null, fetchTaskById($newId));
+
+    return $newId;
+}
+
 function taskSelectSql()
 {
     return "
@@ -542,7 +717,13 @@ try {
         ");
         $stmt->execute(['user_id' => (int) $currentUser['id'], 'id' => $id]);
         logAudit($currentUser, 'task.complete', 'lead_tasks', $id, $before, fetchTaskById($id));
-        echo json_encode(['success' => true, 'message' => 'Tarefa concluída.'], JSON_UNESCAPED_UNICODE);
+
+        $autoFollowupId = maybeCreateAutoFollowupTask($before, $currentUser, getGlobalTaskAutomationSettings());
+        echo json_encode([
+            'success' => true,
+            'message' => $autoFollowupId ? 'Tarefa concluída. Nova tarefa criada automaticamente.' : 'Tarefa concluída.',
+            'auto_followup_id' => $autoFollowupId,
+        ], JSON_UNESCAPED_UNICODE);
         exit;
     }
 

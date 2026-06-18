@@ -66,6 +66,7 @@ try {
         'zap_users',
         'zap_user_sessions',
         'zap_login_attempts',
+        'zap_settings',
         'zap_audit_log',
     ];
     $tableStatus = [];

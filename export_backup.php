@@ -33,6 +33,7 @@ try {
             'lead_tasks' => fetchAllIfTableExists('lead_tasks', 'SELECT * FROM lead_tasks ORDER BY id ASC'),
             'lead_negocio_field_config' => fetchAllIfTableExists('lead_negocio_field_config', 'SELECT * FROM lead_negocio_field_config ORDER BY display_order ASC, field_name ASC'),
             'zap_users' => fetchAllIfTableExists('zap_users', 'SELECT id, username, full_name, role, is_active, created_at, updated_at, last_login_at FROM zap_users ORDER BY id ASC'),
+            'zap_settings' => fetchAllIfTableExists('zap_settings', 'SELECT * FROM zap_settings ORDER BY setting_key ASC'),
             'zap_audit_log' => fetchAllIfTableExists('zap_audit_log', 'SELECT * FROM zap_audit_log ORDER BY id ASC'),
         ],
     ];

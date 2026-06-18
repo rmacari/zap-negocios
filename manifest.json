@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Zap Negócios",
-  "version": "1.82",
+  "version": "1.84",
   "description": "Mini CRM universal para WhatsApp Web: gerencie leads, negócios, tarefas e lembretes com banco próprio em qualquer empresa.",
   "icons": {
     "16": "icons/icon-16.png",
