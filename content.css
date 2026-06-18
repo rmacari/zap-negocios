@@ -60,6 +60,28 @@
   user-select: none;
 }
 
+.tfq-toggle-label {
+  display: inline-block;
+}
+
+.tfq-toggle-count {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #c62828;
+  color: #fff;
+  border: 2px solid #fff;
+  font: 800 12px/1 Arial, sans-serif;
+  box-shadow: 0 3px 10px rgba(198, 40, 40, 0.38);
+}
+
 #tfq-toggle.tfq-toggle-dragging {
   cursor: grabbing;
 }
@@ -1046,9 +1068,28 @@ body.tfq-crm-theme-dark :where([class*="bg-red-50"], [class*="bg-red-100"], [cla
   height: 18px;
   margin-left: 4px;
   border-radius: 999px;
-  background: var(--tf-addon-danger);
+  background: #c62828;
   color: #fff;
+  box-shadow: 0 0 0 2px var(--tf-addon-bg), 0 2px 6px rgba(198, 40, 40, 0.35);
   font: 700 11px/1 Arial, sans-serif;
+}
+
+.tfq-overdue-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid #f3b3b3;
+  background: #fff0f0;
+  color: #9f1d1d;
+  font: 700 13px/1.35 Arial, sans-serif;
+}
+
+#tfq-panel.tfq-theme-dark .tfq-overdue-alert {
+  border-bottom-color: rgba(255, 123, 114, 0.32);
+  background: #3a1f24;
+  color: #ffd7d7;
 }
 
 /* ---------------------------------------------------------------------------

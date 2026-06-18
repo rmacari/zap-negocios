@@ -60,7 +60,11 @@
     lookaheadMinutes: 15,
     historyDays: 1,
     normalPriority: 1,
-    highPriority: 2
+    highPriority: 2,
+    inAppAlertMinutes: 30,
+    soundEnabled: true,
+    emailEnabled: false,
+    emailIntervalMinutes: 120
   };
   const DEFAULT_THEME_SETTINGS = {
     mode: 'auto',
@@ -514,7 +518,12 @@
     if (!toggle) return;
 
     const settings = normalizeToggleSettings(toggleSettings);
-    toggle.textContent = settings.label;
+    const badgeText = toggle.querySelector('.tfq-toggle-count')?.textContent || '';
+    const badgeHidden = toggle.querySelector('.tfq-toggle-count')?.classList.contains('tfq-hidden') !== false;
+    toggle.innerHTML = `
+      <span class="tfq-toggle-label">${escapeHtml(settings.label)}</span>
+      <span id="tfq-toggle-count" class="tfq-toggle-count ${badgeHidden ? 'tfq-hidden' : ''}">${escapeHtml(badgeText)}</span>
+    `;
     toggle.style.setProperty('--tfq-toggle-bg', settings.color);
     toggle.style.setProperty('--tfq-toggle-x', `${settings.x}px`);
     toggle.style.setProperty('--tfq-toggle-y', `${settings.y}px`);
@@ -617,7 +626,11 @@
       lookaheadMinutes: clampNumber(value.lookaheadMinutes ?? DEFAULT_NOTIFICATION_SETTINGS.lookaheadMinutes, 0, 1440),
       historyDays: clampNumber(value.historyDays ?? DEFAULT_NOTIFICATION_SETTINGS.historyDays, 1, 60),
       normalPriority: clampNumber(value.normalPriority ?? DEFAULT_NOTIFICATION_SETTINGS.normalPriority, 0, 2),
-      highPriority: clampNumber(value.highPriority ?? DEFAULT_NOTIFICATION_SETTINGS.highPriority, 0, 2)
+      highPriority: clampNumber(value.highPriority ?? DEFAULT_NOTIFICATION_SETTINGS.highPriority, 0, 2),
+      inAppAlertMinutes: clampNumber(value.inAppAlertMinutes ?? DEFAULT_NOTIFICATION_SETTINGS.inAppAlertMinutes, 5, 240),
+      soundEnabled: value.soundEnabled !== false,
+      emailEnabled: value.emailEnabled === true,
+      emailIntervalMinutes: clampNumber(value.emailIntervalMinutes ?? DEFAULT_NOTIFICATION_SETTINGS.emailIntervalMinutes, 15, 1440)
     };
   }
 
@@ -901,7 +914,11 @@
     const historyInput = document.getElementById('tfq-notification-history-days');
     const normalPriorityInput = document.getElementById('tfq-notification-normal-priority');
     const highPriorityInput = document.getElementById('tfq-notification-high-priority');
-    if (!enabledInput || !intervalInput || !lookaheadInput || !historyInput || !normalPriorityInput || !highPriorityInput) return;
+    const inAppAlertInput = document.getElementById('tfq-notification-in-app-minutes');
+    const soundInput = document.getElementById('tfq-notification-sound-enabled');
+    const emailInput = document.getElementById('tfq-notification-email-enabled');
+    const emailIntervalInput = document.getElementById('tfq-notification-email-interval');
+    if (!enabledInput || !intervalInput || !lookaheadInput || !historyInput || !normalPriorityInput || !highPriorityInput || !inAppAlertInput || !soundInput || !emailInput || !emailIntervalInput) return;
 
     const settings = normalizeNotificationSettings(notificationSettings);
     enabledInput.checked = settings.enabled;
@@ -910,6 +927,10 @@
     historyInput.value = String(settings.historyDays);
     normalPriorityInput.value = String(settings.normalPriority);
     highPriorityInput.value = String(settings.highPriority);
+    inAppAlertInput.value = String(settings.inAppAlertMinutes);
+    soundInput.checked = settings.soundEnabled;
+    emailInput.checked = settings.emailEnabled;
+    emailIntervalInput.value = String(settings.emailIntervalMinutes);
   }
 
   function collectNotificationSettingsForm() {
@@ -919,7 +940,11 @@
       lookaheadMinutes: document.getElementById('tfq-notification-lookahead')?.value,
       historyDays: document.getElementById('tfq-notification-history-days')?.value,
       normalPriority: document.getElementById('tfq-notification-normal-priority')?.value,
-      highPriority: document.getElementById('tfq-notification-high-priority')?.value
+      highPriority: document.getElementById('tfq-notification-high-priority')?.value,
+      inAppAlertMinutes: document.getElementById('tfq-notification-in-app-minutes')?.value,
+      soundEnabled: document.getElementById('tfq-notification-sound-enabled')?.checked === true,
+      emailEnabled: document.getElementById('tfq-notification-email-enabled')?.checked === true,
+      emailIntervalMinutes: document.getElementById('tfq-notification-email-interval')?.value
     });
   }
 
@@ -1154,6 +1179,7 @@
   let observerDebounceTimer     = null;
   let panelRebuildContextKey    = '';
   let panelRebuildTimer         = null;
+  let lastOverdueSoundAt        = 0;
 
   function getPlatform() {
     const host = window.location.hostname;
@@ -2825,6 +2851,7 @@
       const isSelf = CURRENT_USER && Number(CURRENT_USER.id) === Number(user.id);
       const active = Number(user.is_active) === 1;
       const canTouch = !isSelf && canManageTargetRole(user.role);
+      const canEditEmail = isSelf || canTouch;
       const statusLabel = active ? 'ativo' : 'inativo';
       const override = Array.isArray(userPermissionMap[Number(user.id)]);
       const protectedRole = !['viewer', 'editor'].includes(user.role);
@@ -2840,12 +2867,17 @@
             <strong>${escapeHtml(user.full_name || user.username)}</strong>
             <span class="tfq-field-key">${escapeHtml(user.username)} • ${escapeHtml(roleLabel(user.role))} • ${statusLabel}${override ? ' • permissões próprias' : ''}</span>
             <div class="tfq-user-controls">
+              <label class="tfq-label" for="tfq-user-email-${Number(user.id)}">Email</label>
+              <input class="tfq-input tfq-user-email-input" id="tfq-user-email-${Number(user.id)}" data-id="${Number(user.id)}" type="email" value="${escapeHtml(user.email || '')}" placeholder="email do usuário" ${canEditEmail ? '' : 'disabled'} />
+            </div>
+            <div class="tfq-user-controls">
               <label class="tfq-label" for="tfq-user-role-${Number(user.id)}">Grupo</label>
               ${roleControl}
             </div>
             ${renderUserPermissionChecks(user, !canTouch)}
           </div>
           <div class="tfq-item-actions">
+            <button class="tfq-mini-btn tfq-user-save-email" data-id="${Number(user.id)}" ${canEditEmail ? '' : 'disabled'} title="Salvar email do usuário">Salvar email</button>
             <button class="tfq-mini-btn tfq-user-save-role" data-id="${Number(user.id)}" ${canTouch ? '' : 'disabled'} title="Salvar grupo do usuário">Salvar grupo</button>
             <button class="tfq-mini-btn tfq-user-save-permissions" data-id="${Number(user.id)}" ${canTouch ? '' : 'disabled'} title="Salvar permissões próprias">Salvar permissões</button>
             <button class="tfq-mini-btn tfq-user-reset-permissions" data-id="${Number(user.id)}" ${canTouch && override ? '' : 'disabled'} title="Voltar para permissões do grupo">Usar grupo</button>
@@ -2868,6 +2900,10 @@
       btn.addEventListener('click', () => saveUserRole(Number(btn.dataset.id)));
     });
 
+    listEl.querySelectorAll('.tfq-user-save-email').forEach(btn => {
+      btn.addEventListener('click', () => saveUserEmail(Number(btn.dataset.id)));
+    });
+
     listEl.querySelectorAll('.tfq-user-save-permissions').forEach(btn => {
       btn.addEventListener('click', () => saveUserPermissionsFromForm(Number(btn.dataset.id)));
     });
@@ -2885,6 +2921,7 @@
   async function addUser() {
     const usernameInput = document.getElementById('tfq-new-user-username');
     const nameInput = document.getElementById('tfq-new-user-name');
+    const emailInput = document.getElementById('tfq-new-user-email');
     const passwordInput = document.getElementById('tfq-new-user-password');
     const roleInput = document.getElementById('tfq-new-user-role');
     const statusEl = document.getElementById('tfq-users-status');
@@ -2892,6 +2929,7 @@
 
     const username = usernameInput ? usernameInput.value.trim() : '';
     const fullName = nameInput ? nameInput.value.trim() : '';
+    const email = emailInput ? emailInput.value.trim() : '';
     const password = passwordInput ? passwordInput.value : '';
     const role = roleInput ? roleInput.value : 'editor';
 
@@ -2907,11 +2945,12 @@
       const result = await fetchJson(`${API_BASE}/users.php`, {
         method: 'POST',
         headers: adminHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ action: 'create', username, full_name: fullName, password, role })
+        body: JSON.stringify({ action: 'create', username, full_name: fullName, email, password, role })
       });
 
       if (usernameInput) usernameInput.value = '';
       if (nameInput) nameInput.value = '';
+      if (emailInput) emailInput.value = '';
       if (passwordInput) passwordInput.value = '';
       if (statusEl) { statusEl.textContent = result.message || 'Usuário criado.'; statusEl.className = 'success'; }
       await loadUsers();
@@ -2935,6 +2974,25 @@
         body: JSON.stringify({ action: 'update_role', id, role: select.value })
       });
       if (statusEl) { statusEl.textContent = result.message || 'Grupo atualizado.'; statusEl.className = 'success'; }
+      await loadUsers();
+    } catch (error) {
+      if (statusEl) { statusEl.textContent = `Erro: ${error.message}`; statusEl.className = 'error'; }
+    }
+  }
+
+  async function saveUserEmail(id) {
+    const statusEl = document.getElementById('tfq-users-status');
+    const input = document.querySelector(`.tfq-user-email-input[data-id="${id}"]`);
+    if (!input) return;
+
+    try {
+      if (statusEl) { statusEl.textContent = 'Salvando email do usuário...'; statusEl.className = ''; }
+      const result = await fetchJson(`${API_BASE}/users.php`, {
+        method: 'POST',
+        headers: adminHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ action: 'update_email', id, email: input.value.trim() })
+      });
+      if (statusEl) { statusEl.textContent = result.message || 'Email salvo.'; statusEl.className = 'success'; }
       await loadUsers();
     } catch (error) {
       if (statusEl) { statusEl.textContent = `Erro: ${error.message}`; statusEl.className = 'error'; }
@@ -3633,13 +3691,7 @@
     const overdue = pending.filter(isTaskOverdue);
     const today = pending.filter(isTaskToday);
     const summaryEl = document.getElementById('tfq-task-summary');
-    const countEl = document.getElementById('tfq-task-tab-count');
-
-    if (countEl) {
-      countEl.textContent = overdue.length > 0 ? String(overdue.length) : '';
-      countEl.classList.toggle('tfq-hidden', overdue.length === 0);
-      countEl.title = overdue.length > 0 ? `${overdue.length} tarefa(s) atrasada(s) neste lead` : '';
-    }
+    updateTaskTabOverdueBadge();
 
     if (!summaryEl) return;
 
@@ -3712,6 +3764,120 @@
     return { pending, overdue, today, upcoming, noDue };
   }
 
+  function updateTaskTabOverdueBadge() {
+    const countEl = document.getElementById('tfq-task-tab-count');
+    const overviewOverdue = taskOverviewCache.filter(isTaskOverdue).length;
+    const leadOverdue = tasksCache
+      .filter(task => task.status === 'pendente')
+      .filter(isTaskOverdue).length;
+    const count = overviewOverdue || leadOverdue;
+    const scopeText = overviewOverdue ? getTaskOverviewScopeText() : 'neste lead';
+
+    if (countEl) {
+      countEl.textContent = count > 0 ? String(count) : '';
+      countEl.classList.toggle('tfq-hidden', count === 0);
+      countEl.title = count > 0 ? `${count} tarefa(s) atrasada(s) ${scopeText}` : '';
+    }
+
+    updateFloatingOverdueBadge(count, scopeText);
+    updateOverdueAlert(count, scopeText);
+    handleOverdueReminderEffects(count, scopeText);
+  }
+
+  function updateFloatingOverdueBadge(count, scopeText) {
+    const badge = document.getElementById('tfq-toggle-count');
+    if (!badge) return;
+    badge.textContent = count > 0 ? String(count) : '';
+    badge.classList.toggle('tfq-hidden', count === 0);
+    badge.title = count > 0 ? `${count} tarefa(s) atrasada(s) ${scopeText}` : '';
+  }
+
+  function updateOverdueAlert(count, scopeText) {
+    const alertEl = document.getElementById('tfq-overdue-alert');
+    const textEl = document.getElementById('tfq-overdue-alert-text');
+    if (!alertEl || !textEl) return;
+
+    alertEl.classList.toggle('tfq-hidden', count === 0);
+    textEl.textContent = count > 0
+      ? `Você tem ${count} tarefa(s) atrasada(s) ${scopeText}.`
+      : '';
+  }
+
+  function playOverdueSound() {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      const audio = new AudioContext();
+      const oscillator = audio.createOscillator();
+      const gain = audio.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.value = 740;
+      gain.gain.setValueAtTime(0.001, audio.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.08, audio.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.32);
+      oscillator.connect(gain);
+      gain.connect(audio.destination);
+      oscillator.start();
+      oscillator.stop(audio.currentTime + 0.34);
+    } catch {
+      // Som opcional: falhas de permissão do navegador são ignoradas.
+    }
+  }
+
+  function getLocalStorage(keys) {
+    return new Promise(resolve => {
+      try {
+        chrome.storage.local.get(keys, resolve);
+      } catch {
+        resolve({});
+      }
+    });
+  }
+
+  function setLocalStorage(values) {
+    return new Promise(resolve => {
+      try {
+        chrome.storage.local.set(values, resolve);
+      } catch {
+        resolve();
+      }
+    });
+  }
+
+  async function sendOverdueEmailSummary(settings) {
+    if (!isConfigured()) return;
+    const stored = await getLocalStorage(['tfq_last_overdue_email_at']);
+    const lastSentAt = Number(stored.tfq_last_overdue_email_at || 0);
+    const intervalMs = settings.emailIntervalMinutes * 60 * 1000;
+    if (Date.now() - lastSentAt < intervalMs) return;
+
+    await fetchJson(`${API_BASE}/notify_overdue_email.php`, {
+      method: 'POST',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ action: 'send_overdue_summary' })
+    });
+    await setLocalStorage({ tfq_last_overdue_email_at: Date.now() });
+  }
+
+  function handleOverdueReminderEffects(count, scopeText) {
+    if (count <= 0) return;
+    const settings = normalizeNotificationSettings(notificationSettings);
+    if (!settings.enabled) return;
+
+    const now = Date.now();
+    const inAppInterval = settings.inAppAlertMinutes * 60 * 1000;
+    if (settings.soundEnabled && now - lastOverdueSoundAt >= inAppInterval) {
+      lastOverdueSoundAt = now;
+      playOverdueSound();
+    }
+
+    if (settings.emailEnabled) {
+      sendOverdueEmailSummary(settings).catch(error => {
+        setTaskOverviewStatus(`Erro ao enviar email: ${error.message}`, 'error');
+      });
+    }
+  }
+
   function getTaskOverviewGroups() {
     const stats = getTaskOverviewStats();
 
@@ -3744,6 +3910,7 @@
     if (titleEl) titleEl.textContent = canAdminTasks() ? 'Visão geral de tarefas' : 'Minhas tarefas';
 
     const stats = getTaskOverviewStats();
+    updateTaskTabOverdueBadge();
     const filters = [
       { key: 'overdue', label: 'Atrasadas', count: stats.overdue.length, tone: 'danger' },
       { key: 'upcoming', label: 'Próximas', count: stats.upcoming.length, tone: 'info' },
@@ -3858,6 +4025,16 @@
       renderTaskOverview();
       setTaskOverviewStatus(`Erro: ${error.message}`, 'error');
     }
+  }
+
+  function refreshOverdueBadgesOnPageLoad() {
+    if (!isConfigured() || !canViewTasks()) {
+      updateTaskTabOverdueBadge();
+      return;
+    }
+    loadTaskOverview(true).catch(() => {
+      updateTaskTabOverdueBadge();
+    });
   }
 
   async function loadTasks(force = false) {
@@ -4203,6 +4380,11 @@
         <button class="tfq-tab" data-tab="usuarios" type="button">🛡️ Admin</button>
       </div>
 
+      <div id="tfq-overdue-alert" class="tfq-overdue-alert tfq-hidden">
+        <span id="tfq-overdue-alert-text"></span>
+        <button class="tfq-mini-btn" id="tfq-overdue-alert-open" type="button">Ver tarefas</button>
+      </div>
+
       <div id="tfq-body">
 
         <!-- ABA NEGÓCIOS -->
@@ -4481,6 +4663,11 @@
                 </div>
 
                 <div class="tfq-row">
+                  <label class="tfq-label" for="tfq-notification-in-app-minutes">Repetir alerta interno a cada (minutos)</label>
+                  <input class="tfq-input" id="tfq-notification-in-app-minutes" type="number" min="5" max="240" step="5" />
+                </div>
+
+                <div class="tfq-row">
                   <label class="tfq-label" for="tfq-notification-normal-priority">Prioridade da notificação normal</label>
                   <select class="tfq-select" id="tfq-notification-normal-priority">
                     <option value="0">Baixa</option>
@@ -4496,6 +4683,21 @@
                     <option value="1">Normal</option>
                     <option value="2">Alta</option>
                   </select>
+                </div>
+
+                <label class="tfq-check-row" for="tfq-notification-sound-enabled">
+                  <input id="tfq-notification-sound-enabled" type="checkbox" />
+                  Tocar som quando houver tarefa atrasada
+                </label>
+
+                <label class="tfq-check-row" for="tfq-notification-email-enabled">
+                  <input id="tfq-notification-email-enabled" type="checkbox" />
+                  Enviar resumo por email
+                </label>
+
+                <div class="tfq-row">
+                  <label class="tfq-label" for="tfq-notification-email-interval">Repetir email a cada (minutos)</label>
+                  <input class="tfq-input" id="tfq-notification-email-interval" type="number" min="15" max="1440" step="15" />
                 </div>
               </div>
 
@@ -4570,6 +4772,10 @@
                   <input class="tfq-input" id="tfq-new-user-name" type="text" placeholder="ex: Maria Silva" />
                 </div>
                 <div class="tfq-row" style="margin-top:10px;">
+                  <label class="tfq-label" for="tfq-new-user-email">Email</label>
+                  <input class="tfq-input" id="tfq-new-user-email" type="email" placeholder="ex: maria@empresa.com" />
+                </div>
+                <div class="tfq-row" style="margin-top:10px;">
                   <label class="tfq-label" for="tfq-new-user-password">Senha temporária</label>
                   <input class="tfq-input" id="tfq-new-user-password" type="password" />
                 </div>
@@ -4635,6 +4841,7 @@
         renderToggleAppearanceForm();
         renderPanelSettingsForm();
         renderNotificationSettingsForm();
+        refreshOverdueBadgesOnPageLoad();
       });
 
     async function openPanel() {
@@ -4811,6 +5018,11 @@
     });
     panel.querySelector('#tfq-task-reload').addEventListener('click', () => {
       loadTasks(true);
+      loadTaskOverview(true);
+    });
+    panel.querySelector('#tfq-overdue-alert-open').addEventListener('click', () => {
+      openTasksTab();
+      setTaskSectionsState('overview');
       loadTaskOverview(true);
     });
     panel.querySelector('#tfq-reload').addEventListener('click', () => {

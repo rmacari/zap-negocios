@@ -34,3 +34,7 @@ SETUP_KEY=substitua_por_uma_chave_de_setup_longa_e_aleatoria
 # Chave legada para versões antigas da extensão. A versão atual usa usuários
 # e permissões; mantenha vazia ou remova se todos já estiverem na versão nova.
 ADMIN_KEY=legado_opcional_para_versoes_antigas
+
+# Email usado como remetente dos alertas de tarefas atrasadas.
+# No Plesk, prefira uma caixa existente do domínio.
+MAIL_FROM=nao-responda@seudominio.com

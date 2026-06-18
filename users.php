@@ -51,7 +51,7 @@ function validatePassword($password)
 function fetchUserForManagement($id)
 {
     $stmt = getDb()->prepare("
-        SELECT id, username, full_name, role, is_active
+        SELECT id, username, full_name, email, role, is_active
         FROM zap_users
         WHERE id = :id
         LIMIT 1
@@ -188,7 +188,7 @@ function filterVisibleUserPermissions($userPermissions, $visibleUsers)
 function fetchVisibleUsersForManagement($currentUser)
 {
     $stmt = getDb()->query("
-        SELECT id, username, full_name, role, is_active, created_at, updated_at, last_login_at
+        SELECT id, username, full_name, email, role, is_active, created_at, updated_at, last_login_at
         FROM zap_users
         ORDER BY FIELD(role, 'owner', 'admin', 'editor', 'viewer'), username ASC
     ");
@@ -255,6 +255,12 @@ try {
         $username = validateUsername($data['username'] ?? '');
         $password = validatePassword($data['password'] ?? '');
         $fullName = trim((string) ($data['full_name'] ?? ''));
+        $email = trim((string) ($data['email'] ?? ''));
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'Email inválido.']);
+            exit;
+        }
         $role = normalizeUserRole($data['role'] ?? 'editor');
 
         if (!canManageTargetUser($currentUser, $role)) {
@@ -264,13 +270,14 @@ try {
         }
 
         $stmt = getDb()->prepare("
-            INSERT INTO zap_users (username, password_hash, full_name, role, is_active)
-            VALUES (:username, :password_hash, :full_name, :role, 1)
+            INSERT INTO zap_users (username, password_hash, full_name, email, role, is_active)
+            VALUES (:username, :password_hash, :full_name, :email, :role, 1)
         ");
         $stmt->execute([
             'username'      => $username,
             'password_hash' => password_hash($password, PASSWORD_DEFAULT),
             'full_name'     => $fullName,
+            'email'         => $email,
             'role'          => $role,
         ]);
         $newId = (int) getDb()->lastInsertId();
@@ -278,6 +285,7 @@ try {
             'id' => $newId,
             'username' => $username,
             'full_name' => $fullName,
+            'email' => $email,
             'role' => $role,
             'is_active' => 1,
         ]);
@@ -291,6 +299,30 @@ try {
     }
 
     $target = fetchUserForManagement((int) ($data['id'] ?? 0));
+    if ($action === 'update_email') {
+        $isSelf = (int) ($currentUser['id'] ?? 0) === (int) $target['id'];
+        if (!$isSelf && !canManageTargetUser($currentUser, $target['role'], (int) $target['id'])) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => 'Você não pode alterar este usuário.']);
+            exit;
+        }
+
+        $email = trim((string) ($data['email'] ?? ''));
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'Email inválido.']);
+            exit;
+        }
+
+        $stmt = getDb()->prepare('UPDATE zap_users SET email = :email WHERE id = :id');
+        $stmt->execute(['email' => $email, 'id' => (int) $target['id']]);
+
+        logAudit($currentUser, 'user.update_email', 'zap_users', (int) $target['id'], $target, fetchUserForManagement((int) $target['id']));
+
+        echo json_encode(['success' => true, 'message' => 'Email do usuário atualizado.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
     if (!canManageTargetUser($currentUser, $target['role'], (int) $target['id'])) {
         http_response_code(403);
         echo json_encode(['success' => false, 'message' => 'Você não pode alterar este usuário.']);

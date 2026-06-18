@@ -513,6 +513,7 @@ function requireUser($minRole = 'viewer')
             u.id,
             u.username,
             u.full_name,
+            u.email,
             u.role,
             u.is_active,
             s.id AS session_id
@@ -554,6 +555,7 @@ function publicUser($user)
         'id'        => (int) $user['id'],
         'username'  => $user['username'],
         'full_name' => $user['full_name'] ?? '',
+        'email'     => $user['email'] ?? '',
         'role'        => normalizeUserRole($user['role'] ?? 'viewer'),
         'permissions' => $user['permissions'] ?? getRolePermissions($user['role'] ?? 'viewer'),
         'permission_source' => $user['permission_source'] ?? 'role',

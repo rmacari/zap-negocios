@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS zap_users (
     username VARCHAR(80) NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     full_name VARCHAR(255) NOT NULL DEFAULT '',
+    email VARCHAR(255) NOT NULL DEFAULT '',
     role ENUM('viewer', 'editor', 'admin', 'owner') NOT NULL DEFAULT 'editor',
     is_active TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

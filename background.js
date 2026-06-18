@@ -15,7 +15,11 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
   lookaheadMinutes: 15,
   historyDays: 1,
   normalPriority: 1,
-  highPriority: 2
+  highPriority: 2,
+  inAppAlertMinutes: 30,
+  soundEnabled: true,
+  emailEnabled: false,
+  emailIntervalMinutes: 120
 };
 
 function getUserConfig() {
@@ -49,7 +53,11 @@ function normalizeNotificationSettings(value = {}) {
     lookaheadMinutes: clampNumber(value.lookaheadMinutes ?? DEFAULT_NOTIFICATION_SETTINGS.lookaheadMinutes, 0, 1440),
     historyDays: clampNumber(value.historyDays ?? DEFAULT_NOTIFICATION_SETTINGS.historyDays, 1, 60),
     normalPriority: clampNumber(value.normalPriority ?? DEFAULT_NOTIFICATION_SETTINGS.normalPriority, 0, 2),
-    highPriority: clampNumber(value.highPriority ?? DEFAULT_NOTIFICATION_SETTINGS.highPriority, 0, 2)
+    highPriority: clampNumber(value.highPriority ?? DEFAULT_NOTIFICATION_SETTINGS.highPriority, 0, 2),
+    inAppAlertMinutes: clampNumber(value.inAppAlertMinutes ?? DEFAULT_NOTIFICATION_SETTINGS.inAppAlertMinutes, 5, 240),
+    soundEnabled: value.soundEnabled !== false,
+    emailEnabled: value.emailEnabled === true,
+    emailIntervalMinutes: clampNumber(value.emailIntervalMinutes ?? DEFAULT_NOTIFICATION_SETTINGS.emailIntervalMinutes, 15, 1440)
   };
 }
 
@@ -121,6 +129,38 @@ async function fetchReminderTasks(config, settings) {
   return Array.isArray(result.tasks) ? result.tasks : [];
 }
 
+function isTaskOverdue(task) {
+  const due = parseTaskDate(task && task.due_at);
+  return Boolean(due && due.getTime() < Date.now() && task.status === 'pendente');
+}
+
+async function sendOverdueEmailSummary(config, settings, overdueCount) {
+  if (!settings.emailEnabled || overdueCount <= 0) return;
+
+  const stored = await chrome.storage.local.get(['tfq_last_overdue_email_at']);
+  const lastSentAt = Number(stored.tfq_last_overdue_email_at || 0);
+  const intervalMs = settings.emailIntervalMinutes * 60 * 1000;
+  if (Date.now() - lastSentAt < intervalMs) return;
+
+  const apiBase = normalizeApiBase(config.apiBase);
+  const response = await fetch(`${apiBase}/notify_overdue_email.php`, {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      'X-Api-Key': config.apiKey,
+      Authorization: `Bearer ${config.token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ action: 'send_overdue_summary' })
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result.success === false) {
+    throw new Error(result.message || `HTTP ${response.status}`);
+  }
+
+  await chrome.storage.local.set({ tfq_last_overdue_email_at: Date.now() });
+}
+
 async function showTaskReminder(task, notifiedMap, settings) {
   const key = notificationKey(task);
   if (notifiedMap[key]) return;
@@ -150,6 +190,8 @@ async function checkTaskReminders() {
 
   try {
     const tasks = await fetchReminderTasks(config, settings);
+    const overdueCount = tasks.filter(isTaskOverdue).length;
+    await sendOverdueEmailSummary(config, settings, overdueCount);
     const stored = await chrome.storage.local.get(['tfq_notified_task_keys']);
     const notifiedMap = stored.tfq_notified_task_keys || {};
     const cutoff = Date.now() - (settings.historyDays * 24 * 60 * 60 * 1000);
